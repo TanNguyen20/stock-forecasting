@@ -47,10 +47,15 @@ class App:
         return CycleResult(quotes, errors, fired)
 
 
-@lru_cache(maxsize=1)
-def build_app() -> App:
+def create_app() -> App:
+    """Bộ thành phần mới (phiên HTTP riêng) — dùng cho luồng worker để không chia sẻ với giao diện."""
     s = get_settings()
     repo = Repository(s.db_path)
     notifier = Notifier(s)
     return App(repo=repo, collector=Collector(repo, s.sources), notifier=notifier,
                engine=AlertEngine(repo, notifier))
+
+
+@lru_cache(maxsize=1)
+def build_app() -> App:
+    return create_app()

@@ -6,7 +6,8 @@ import streamlit as st
 from stockvn.market import is_index, now_vn
 from stockvn.models import ALERT_LABELS, ALERT_UNITS, CHANNEL_LABELS, Alert, AlertKind, Channel
 from stockvn.service import HEARTBEAT_KEY
-from views.common import DISCLAIMER, fmt_price, fmt_time, get_app, symbol_picker
+from stockvn.worker import background_state
+from views.common import DISCLAIMER, fmt_price, fmt_time, get_app, symbol_picker, worker_state_label
 
 app = get_app()
 repo = app.repo
@@ -17,12 +18,14 @@ st.title("🔔 Cảnh báo giá")
 # ---- Trạng thái worker
 beat = repo.get_meta(HEARTBEAT_KEY)
 beat_dt = datetime.fromisoformat(beat) if beat else None
-if beat_dt and (now_vn() - beat_dt).total_seconds() < 600:
+if background_state() == "running":
+    st.success(f"Worker chạy kèm giao diện · lần kiểm tra gần nhất {fmt_time(beat_dt)}", icon="✅")
+elif beat_dt and (now_vn() - beat_dt).total_seconds() < 600:
     st.success(f"Worker đang chạy · lần kiểm tra gần nhất {fmt_time(beat_dt)}", icon="✅")
 else:
     st.warning(
-        "Worker nền chưa chạy (hoặc đang ngoài giờ giao dịch). Cảnh báo chỉ được gửi tự động khi worker chạy: "
-        "`python worker.py` — xem trang **Cài đặt**.", icon="⏸️",
+        f"Worker nền: {worker_state_label()}. Lần kiểm tra gần nhất {fmt_time(beat_dt)} "
+        "(ngoài giờ giao dịch worker tạm nghỉ). Xem trang **Cài đặt**.", icon="⏸️",
     )
 
 # ---- Tạo cảnh báo

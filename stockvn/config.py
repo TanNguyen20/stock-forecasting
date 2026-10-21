@@ -31,6 +31,7 @@ class Settings:
     sources: tuple[str, ...]
     poll_seconds: int
     history_years: int
+    embed_worker: bool
 
     smtp_host: str
     smtp_port: int
@@ -62,6 +63,7 @@ def get_settings() -> Settings:
         sources=_list(env("STOCK_SOURCES")) or ("VCI", "DNSE", "KBS"),
         poll_seconds=int(env("STOCK_POLL_SECONDS", "60")),
         history_years=int(env("STOCK_HISTORY_YEARS", "10")),
+        embed_worker=_bool(env("STOCK_EMBED_WORKER"), default=True),
         smtp_host=env("SMTP_HOST", ""),
         smtp_port=int(env("SMTP_PORT", "465")),
         smtp_user=env("SMTP_USER", ""),

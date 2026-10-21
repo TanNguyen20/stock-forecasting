@@ -1,7 +1,32 @@
-"""Ứng dụng Chứng khoán VN — chạy: streamlit run app.py"""
-import streamlit as st
+"""Ứng dụng Chứng khoán VN.
 
-from stockvn.market import now_vn, session_label
+    python app.py            # mở giao diện + worker cảnh báo khởi động ngay
+    streamlit run app.py     # worker khởi động khi có phiên trình duyệt đầu tiên
+
+Worker chạy kèm trong luồng nền; tắt bằng STOCK_EMBED_WORKER=false trong .env.
+"""
+import sys
+
+from streamlit import runtime
+
+from stockvn.config import get_settings
+from stockvn.worker import start_background
+
+if __name__ == "__main__" and not runtime.exists():
+    # `python app.py`: khởi động worker trước rồi chạy máy chủ Streamlit trong cùng tiến trình.
+    from streamlit.web import cli as stcli
+
+    if get_settings().embed_worker:
+        start_background()
+    sys.argv = ["streamlit", "run", __file__, *sys.argv[1:]]
+    sys.exit(stcli.main())
+
+import streamlit as st  # noqa: E402
+
+from stockvn.market import now_vn, session_label  # noqa: E402
+
+if get_settings().embed_worker:
+    start_background()  # chỉ khởi động một lần mỗi tiến trình
 
 st.set_page_config(page_title="Chứng khoán VN", page_icon="📈", layout="wide")
 

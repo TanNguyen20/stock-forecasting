@@ -32,12 +32,19 @@ copy .env.example .env
 
 | Việc | Lệnh |
 |---|---|
-| Mở giao diện | `run_app.bat` → http://localhost:8501 |
-| Worker gửi cảnh báo nền | `run_worker.bat` |
+| Mở giao diện + worker cảnh báo | `run_app.bat` (= `python app.py`) → http://localhost:8501 |
+| Chỉ chạy worker, không giao diện | `run_worker.bat` |
 | Một vòng worker rồi thoát | `run_worker.bat --once` |
 | Chạy kiểm thử | `.venv\Scripts\python -m pytest` |
 
-Worker cập nhật giá mỗi `STOCK_POLL_SECONDS` giây trong giờ giao dịch (9:00–11:30, 13:00–15:00, thứ 2–6), chốt giá một lần sau 15:00. Để tự chạy cùng Windows: **Task Scheduler → Create Task → Trigger "At log on" → Action: `run_worker.bat`**.
+Worker cập nhật giá mỗi `STOCK_POLL_SECONDS` giây trong giờ giao dịch (9:00–11:30, 13:00–15:00, thứ 2–6), chốt giá một lần sau 15:00.
+
+**Worker chạy kèm giao diện** (mặc định, tắt bằng `STOCK_EMBED_WORKER=false`): là một luồng nền trong tiến trình Streamlit, log ở `logs/app.log`.
+
+- `python app.py` / `run_app.bat`: worker khởi động ngay cùng máy chủ, không cần mở trình duyệt.
+- `streamlit run app.py`: worker khởi động khi có phiên trình duyệt đầu tiên.
+
+Mỗi CSDL chỉ có **một** worker hoạt động (khóa file `data/stock.db.worker.lock`), nên chạy thêm `run_worker.bat` không gây gửi cảnh báo trùng: worker đến sau chờ và tự tiếp quản khi worker trước dừng; `--once` thì bỏ qua. Để cảnh báo chạy cả khi không mở giao diện, tự chạy worker cùng Windows: **Task Scheduler → Create Task → Trigger "At log on" → Action: `run_worker.bat`**.
 
 ## Cấu hình `.env`
 
@@ -47,6 +54,7 @@ Worker cập nhật giá mỗi `STOCK_POLL_SECONDS` giây trong giờ giao dịc
 | `STOCK_SOURCES` | `VCI,DNSE,KBS` | Thứ tự nguồn dữ liệu |
 | `STOCK_POLL_SECONDS` | `60` | Chu kỳ worker (tối thiểu 15) |
 | `STOCK_HISTORY_YEARS` | `10` | Số năm lịch sử tải lần đầu |
+| `STOCK_EMBED_WORKER` | `true` | Chạy worker cảnh báo kèm giao diện (`app.py`) |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USE_SSL` | –, `465`, `true` | Máy chủ email (`false` = STARTTLS, thường cổng 587) |
 | `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM` | – | Tài khoản gửi. Gmail: dùng **Mật khẩu ứng dụng** |
 | `SMTP_TO` | – | Người nhận, cách nhau dấu phẩy |
@@ -57,8 +65,8 @@ Không commit `.env` (đã có trong `.gitignore`).
 ## Cấu trúc
 
 ```
-app.py                 # điểm vào Streamlit (điều hướng)
-worker.py              # tiến trình nền: cập nhật giá + gửi cảnh báo
+app.py                 # điểm vào Streamlit (điều hướng) + khởi động worker kèm
+worker.py              # worker chạy riêng (dòng lệnh)
 views/                 # các trang: tổng quan, biểu đồ, cảnh báo, dự báo, cài đặt
 stockvn/
   config.py            # đọc .env
@@ -69,6 +77,7 @@ stockvn/
   alerts.py            # đánh giá điều kiện, kích hoạt theo cạnh
   notifier.py          # Email + Windows toast
   service.py           # ghép thành phần, một vòng cập nhật
+  worker.py            # vòng lặp worker, khóa một-worker-mỗi-CSDL, luồng nền cho giao diện
   forecast/            # mô hình dự báo, kiểm định, ensemble
 tests/                 # pytest (không gọi mạng)
 ```

@@ -8,6 +8,7 @@ import streamlit as st
 
 from stockvn.market import fmt_pct, fmt_price, is_index, now_vn
 from stockvn.service import App, build_app
+from stockvn.worker import background_state
 
 DISCLAIMER = (
     "⚠️ Dữ liệu lấy từ nguồn công khai (VCI, DNSE, KBS) và có thể chậm hoặc sai lệch. "
@@ -92,6 +93,19 @@ def load_history(symbol: str, min_rows: int = 250) -> pd.DataFrame:
     return app.repo.get_prices(symbol)
 
 
+WORKER_STATES = {
+    "running": "✅ Đang chạy kèm giao diện",
+    "starting": "⏳ Đang khởi động",
+    "standby": "⏸️ Đang chờ — một worker khác (vd. `run_worker.bat`) đang chạy trên cùng CSDL",
+    "stopped": "❌ Đã dừng do lỗi — xem `logs/app.log`",
+    "off": "⛔ Không chạy kèm (`STOCK_EMBED_WORKER=false`)",
+}
+
+
+def worker_state_label() -> str:
+    return WORKER_STATES.get(background_state(), background_state())
+
+
 def color_change(v: float) -> str:
     if pd.isna(v) or abs(v) < 1e-9:
         return f"color: {FLAT}"
@@ -104,5 +118,5 @@ def fmt_time(dt: datetime | None) -> str:
 
 __all__ = [
     "DISCLAIMER", "UP", "DOWN", "FLAT", "get_app", "symbol_table", "symbol_options", "symbol_label",
-    "symbol_picker", "load_history", "color_change", "fmt_time", "fmt_price", "fmt_pct",
+    "symbol_picker", "load_history", "color_change", "fmt_time", "fmt_price", "fmt_pct", "worker_state_label",
 ]

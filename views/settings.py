@@ -7,7 +7,7 @@ from stockvn.config import ROOT, get_settings
 from stockvn.forecast import ALL_MODELS
 from stockvn.models import CHANNEL_LABELS, Channel
 from stockvn.service import HEARTBEAT_KEY
-from views.common import fmt_time, get_app, symbol_table
+from views.common import fmt_time, get_app, symbol_table, worker_state_label
 
 app = get_app()
 repo = app.repo
@@ -40,13 +40,17 @@ st.caption("Sau khi sửa `.env`, khởi động lại ứng dụng và worker �
 # ---- Worker
 st.subheader("Worker nền (gửi cảnh báo tự động)")
 beat = repo.get_meta(HEARTBEAT_KEY)
+st.markdown(f"Trạng thái: {worker_state_label()}")
 st.write("Lần chạy gần nhất:", fmt_time(datetime.fromisoformat(beat)) if beat else "chưa chạy")
 st.markdown(
     f"""
 Worker cập nhật giá mỗi **{s.poll_seconds} giây** trong giờ giao dịch (9:00–11:30, 13:00–15:00, thứ 2–6)
 cho các mã trong danh mục và các mã có cảnh báo, rồi gửi thông báo khi điều kiện thỏa.
 
-- Chạy thủ công: mở terminal tại `{ROOT}` và chạy `run_worker.bat` (hoặc `.venv\\Scripts\\python worker.py`).
+- Mặc định worker **chạy kèm giao diện**: `run_app.bat` (hoặc `.venv\\Scripts\\python app.py`) khởi động cả hai.
+  Tắt bằng `STOCK_EMBED_WORKER=false` trong `.env`.
+- Chạy riêng không cần giao diện: mở terminal tại `{ROOT}` và chạy `run_worker.bat`.
+  Mỗi CSDL chỉ có một worker hoạt động; worker đến sau tự chờ và tiếp quản khi worker trước dừng.
 - Tự khởi động cùng Windows: dùng **Task Scheduler** → *Create Task* → Trigger *At log on* → Action chạy `run_worker.bat`.
 """
 )
