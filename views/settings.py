@@ -1,3 +1,4 @@
+import secrets
 import sys
 from datetime import datetime
 
@@ -35,7 +36,8 @@ with c2, st.container(border=True):
     st.caption("Hiện popup ở góc màn hình của chính máy đang chạy app (cần Windows). Chỉ hoạt động khi máy bật "
                "và worker đang chạy. Tắt bằng `TOAST_ENABLED=false` trong `.env`.")
 
-with st.container(border=True):
+c3, c4 = st.columns(2)
+with c3, st.container(border=True):
     header = st.empty()  # điền sau webpush_toggle để phản ánh đăng ký vừa thêm/xóa
     st.caption("Popup của hệ điều hành (Windows, macOS, Android) do máy chủ đẩy qua dịch vụ push của trình duyệt — "
                "dùng được cả khi máy chủ chạy Linux (vd. Streamlit Cloud). Không cần mở tab app nhưng trình duyệt "
@@ -44,6 +46,21 @@ with st.container(border=True):
     subs = repo.push_subscriptions()
     status = f"✅ {len(subs)} trình duyệt đã bật" if subs else "❌ Chưa có trình duyệt nào bật"
     header.markdown(f"**{CHANNEL_LABELS[Channel.WEBPUSH]}** (Web Push) — {status}")
+with c4, st.container(border=True):
+    st.markdown(f"**{CHANNEL_LABELS[Channel.NTFY]}** ([ntfy.sh](https://ntfy.sh)) — "
+                f"{'✅ Đã cấu hình' if avail[Channel.NTFY] else '❌ Chưa cấu hình'}")
+    if avail[Channel.NTFY]:
+        # Topic có tác dụng như mật khẩu (ai biết đều đọc/gửi được) -> không hiện đầy đủ.
+        st.caption(f"Máy chủ: `{s.ntfy_server}` · Topic: `{s.ntfy_topic[:4]}…` "
+                   f"({len(s.ntfy_topic)} ký tự){' · có token' if s.ntfy_token else ''}")
+    elif reason := app.notifier.unavailable_reason(Channel.NTFY):
+        st.caption(f"Lý do: {reason}.")
+    st.caption("Nhận trên điện thoại (app ntfy Android/iOS) hoặc máy tính (web app ntfy trên Chrome/Edge, bật "
+               "thông báo) bằng cách đăng ký đúng topic trong `.env`/Secrets. Không cần tài khoản.")
+    if not avail[Channel.NTFY]:
+        topic = st.session_state.setdefault("ntfy_topic_hint", f"stockvn-{secrets.token_hex(12)}")
+        st.code(f"NTFY_TOPIC={topic}", language="ini")
+        st.caption("Topic ngẫu nhiên gợi ý — ai biết topic đều đọc và gửi được tin, đừng chia sẻ.")
 
 st.code(
     "SMTP_HOST=smtp.gmail.com\nSMTP_PORT=465\nSMTP_USE_SSL=true\n"

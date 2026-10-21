@@ -1,12 +1,15 @@
-"""Gửi thông báo qua Email (SMTP), thông báo Windows (toast) và thông báo trình duyệt (Web Push)."""
+"""Gửi thông báo qua Email (SMTP), thông báo Windows (toast), thông báo trình duyệt (Web Push) và ntfy."""
 from __future__ import annotations
 
 import html
 import logging
+import re
 import smtplib
 import ssl
 import sys
 from email.message import EmailMessage
+
+import requests
 
 from . import webpush
 from .config import Settings
@@ -14,6 +17,10 @@ from .db import Repository
 from .models import Channel
 
 log = logging.getLogger(__name__)
+
+NTFY_TOPIC_RE = re.compile(r"[-_A-Za-z0-9]{1,64}")
+NTFY_MAX_BYTES = 4000  # ntfy giới hạn nội dung 4.096 byte
+NTFY_PRIORITY = 4  # high
 
 
 class Notifier:
@@ -28,6 +35,12 @@ class Notifier:
         """None nếu kênh dùng được, ngược lại là lý do để hiện cho người dùng."""
         if ch is Channel.EMAIL:
             return None if self.s.email_enabled else "chưa cấu hình SMTP_HOST / SMTP_TO"
+        if ch is Channel.NTFY:
+            if not self.s.ntfy_topic:
+                return "chưa cấu hình NTFY_TOPIC"
+            if not NTFY_TOPIC_RE.fullmatch(self.s.ntfy_topic):
+                return "NTFY_TOPIC chỉ gồm chữ, số, '-' và '_' (tối đa 64 ký tự)"
+            return None
         if ch is Channel.WEBPUSH:
             if not webpush.supported():
                 return "thiếu gói pywebpush"
@@ -58,6 +71,8 @@ class Notifier:
                     self.send_toast(title, body)
                 elif ch is Channel.WEBPUSH:
                     self.send_webpush(title, body)
+                elif ch is Channel.NTFY:
+                    self.send_ntfy(title, body)
                 result[ch] = "ok"
             except Exception as exc:  # noqa: BLE001
                 log.error("Gửi %s thất bại: %s", ch, exc)
@@ -94,6 +109,23 @@ class Notifier:
         if self.s.smtp_user:
             smtp.login(self.s.smtp_user, self.s.smtp_password)
         smtp.send_message(msg)
+
+    # ---- ntfy
+    def send_ntfy(self, title: str, body: str) -> None:
+        if reason := self.unavailable_reason(Channel.NTFY):
+            raise RuntimeError(f"ntfy không khả dụng: {reason}")
+        # Gửi dạng JSON tới URL gốc: tiêu đề tiếng Việt không phải đi qua HTTP header.
+        payload = {
+            "topic": self.s.ntfy_topic,
+            "title": title,
+            "message": body.encode("utf-8")[:NTFY_MAX_BYTES].decode("utf-8", errors="ignore"),
+            "priority": NTFY_PRIORITY,
+            "tags": ["chart_with_upwards_trend"],
+        }
+        headers = {"Authorization": f"Bearer {self.s.ntfy_token}"} if self.s.ntfy_token else {}
+        resp = requests.post(f"{self.s.ntfy_server.rstrip('/')}/", json=payload, headers=headers, timeout=15)
+        if not resp.ok:
+            raise RuntimeError(f"ntfy trả về HTTP {resp.status_code}: {resp.text[:200]}")
 
     # ---- Web Push
     def send_webpush(self, title: str, body: str) -> int:

@@ -47,6 +47,10 @@ class Settings:
     webpush_private_key: str
     webpush_subject: str
 
+    ntfy_server: str
+    ntfy_topic: str
+    ntfy_token: str
+
     @property
     def email_enabled(self) -> bool:
         return bool(self.smtp_host and self.smtp_to)
@@ -78,4 +82,7 @@ def get_settings() -> Settings:
         toast_app_id=env("TOAST_APP_ID", "Chứng khoán VN"),
         webpush_private_key=env("WEBPUSH_VAPID_PRIVATE_KEY", ""),
         webpush_subject=env("WEBPUSH_SUBJECT", ""),
+        ntfy_server=env("NTFY_SERVER", "") or "https://ntfy.sh",
+        ntfy_topic=env("NTFY_TOPIC", "").strip(),
+        ntfy_token=env("NTFY_TOKEN", "").strip(),
     )
