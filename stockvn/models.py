@@ -60,11 +60,13 @@ ALERT_UNITS: dict[AlertKind, str] = {
 class Channel(StrEnum):
     EMAIL = "email"
     TOAST = "toast"
+    WEBPUSH = "webpush"
 
 
 CHANNEL_LABELS: dict[Channel, str] = {
     Channel.EMAIL: "Email",
     Channel.TOAST: "Thông báo Windows",
+    Channel.WEBPUSH: "Thông báo trình duyệt",
 }
 
 

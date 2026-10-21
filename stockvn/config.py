@@ -44,6 +44,9 @@ class Settings:
     toast_enabled: bool
     toast_app_id: str
 
+    webpush_private_key: str
+    webpush_subject: str
+
     @property
     def email_enabled(self) -> bool:
         return bool(self.smtp_host and self.smtp_to)
@@ -73,4 +76,6 @@ def get_settings() -> Settings:
         smtp_use_ssl=_bool(env("SMTP_USE_SSL"), default=True),
         toast_enabled=_bool(env("TOAST_ENABLED"), default=True),
         toast_app_id=env("TOAST_APP_ID", "Chứng khoán VN"),
+        webpush_private_key=env("WEBPUSH_VAPID_PRIVATE_KEY", ""),
+        webpush_subject=env("WEBPUSH_SUBJECT", ""),
     )

@@ -5,7 +5,7 @@
 - **Thu thập dữ liệu**: giá OHLCV ngày từ nguồn công khai **VCI (Vietcap) → DNSE → KBS** (tự chuyển nguồn khi lỗi), lưu vào SQLite.
 - **Bảng giá danh mục**: giá, +/-, %, khối lượng, KL so với TB20, biểu đồ mini 30 phiên, chỉ số VNINDEX/VN30.
 - **Biểu đồ kỹ thuật**: nến, SMA20/50/200, Bollinger, khối lượng, RSI(14), MACD; xuất CSV.
-- **Cảnh báo giá** qua **Email (SMTP)** và **thông báo Windows**: giá vượt/thủng ngưỡng, % tăng/giảm trong phiên, khối lượng đột biến, RSI quá mua/quá bán.
+- **Cảnh báo giá** qua **Email (SMTP)**, **thông báo Windows** và **thông báo trình duyệt (Web Push)**: giá vượt/thủng ngưỡng, % tăng/giảm trong phiên, khối lượng đột biến, RSI quá mua/quá bán.
 - **Dự báo**: Naive (mốc chuẩn), Holt-Winters/ETS, ARIMA, Gradient Boosting, Prophet, LSTM và **Ensemble**; có khoảng dự báo và **kiểm định walk-forward**.
 
 > ⚠️ Dữ liệu từ nguồn công khai có thể chậm hoặc sai lệch. Dự báo chỉ mang tính tham khảo, **không phải khuyến nghị đầu tư**.
@@ -59,6 +59,8 @@ Mỗi CSDL chỉ có **một** worker hoạt động (khóa file `data/stock.db.
 | `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM` | – | Tài khoản gửi. Gmail: dùng **Mật khẩu ứng dụng** |
 | `SMTP_TO` | – | Người nhận, cách nhau dấu phẩy |
 | `TOAST_ENABLED` | `true` | Bật/tắt thông báo Windows |
+| `WEBPUSH_VAPID_PRIVATE_KEY` | tự sinh, lưu trong CSDL | Khóa VAPID cho Web Push. Nên đặt cố định khi deploy cloud |
+| `WEBPUSH_SUBJECT` | `mailto:SMTP_FROM` | Liên hệ gửi kèm cho dịch vụ push |
 
 Không commit `.env` (đã có trong `.gitignore`).
 
@@ -68,6 +70,7 @@ Không commit `.env` (đã có trong `.gitignore`).
 app.py                 # điểm vào Streamlit (điều hướng) + khởi động worker kèm
 worker.py              # worker chạy riêng (dòng lệnh)
 views/                 # các trang: tổng quan, biểu đồ, cảnh báo, dự báo, cài đặt
+  webpush_ui.py        # nút bật/tắt thông báo trình duyệt (component trong webpush_frontend/)
 stockvn/
   config.py            # đọc .env
   market.py            # giờ VN (UTC+7), giờ giao dịch, định dạng số kiểu VN
@@ -75,7 +78,8 @@ stockvn/
   db.py                # SQLite (WAL) — prices, quotes, watchlist, alerts, alert_log
   indicators.py        # SMA, EMA, RSI, MACD, Bollinger
   alerts.py            # đánh giá điều kiện, kích hoạt theo cạnh
-  notifier.py          # Email + Windows toast
+  notifier.py          # Email + Windows toast + Web Push
+  webpush.py           # Web Push (VAPID): khóa, đăng ký trình duyệt, gửi
   service.py           # ghép thành phần, một vòng cập nhật
   worker.py            # vòng lặp worker, khóa một-worker-mỗi-CSDL, luồng nền cho giao diện
   forecast/            # mô hình dự báo, kiểm định, ensemble
@@ -100,6 +104,8 @@ tests/                 # pytest (không gọi mạng)
 
 **Kiểm định walk-forward**: cắt chuỗi tại *k* mốc cuối dữ liệu, mỗi mốc dự báo *h* phiên rồi so với thực tế → MAPE, RMSE, tỷ lệ đúng hướng, độ phủ khoảng dự báo. Luôn so với **Naive**: mô hình không thắng Naive thì không có giá trị dự báo hơn việc giữ nguyên giá.
 
+**Thông báo trình duyệt (Web Push)**: trang **Cài đặt** → *Bật thông báo trình duyệt* trên mỗi trình duyệt/thiết bị muốn nhận. Máy chủ (kể cả Linux/Streamlit Cloud) đẩy tin qua dịch vụ push của trình duyệt (FCM, Mozilla, WNS, Apple) và trình duyệt hiện popup của hệ điều hành — không cần mở tab app, nhưng trình duyệt phải đang chạy. Cần HTTPS hoặc `localhost`. Đăng ký hết hạn (HTTP 404/410) tự bị xóa.
+
 ## Giới hạn đã biết
 
 - API của VCI/DNSE/KBS là endpoint công khai, không có tài liệu chính thức; có thể thay đổi hoặc chặn bất cứ lúc nào. Khi đó sửa `stockvn/collector.py`.
@@ -107,3 +113,4 @@ tests/                 # pytest (không gọi mạng)
 - Lịch giao dịch chưa trừ ngày nghỉ lễ (Tết, 30/4, 2/9…): worker vẫn chạy nhưng không có giá mới; ngày dự báo có thể rơi vào ngày lễ.
 - Các nguồn có thể điều chỉnh giá (cổ tức, chia tách) khác nhau. Bấm **⟳ Tải lại** trên trang Biểu đồ để tải lại toàn bộ lịch sử từ một nguồn.
 - Thông báo Windows chỉ hiện khi máy bật, đã đăng nhập và worker đang chạy.
+- Web Push: app không có đăng nhập nên **ai mở được app đều bật được thông báo** và nhận cảnh báo của bạn (tối đa 20 trình duyệt). Safari trên iPhone/iPad chỉ nhận Web Push khi trang được thêm vào màn hình chính.

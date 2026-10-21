@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<style>
+  :root { --text: #31333f; --primary: #2563eb; --border: rgba(49, 51, 63, 0.2); --font: "Source Sans Pro", sans-serif; }
+  html, body { margin: 0; background: transparent; color: var(--text); font-family: var(--font); font-size: 14px; }
+  .row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; min-height: 40px; }
+  button { font: inherit; padding: 6px 14px; border-radius: 8px; border: 1px solid var(--border);
+           background: transparent; color: var(--text); cursor: pointer; }
+  button.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+  button:disabled { opacity: 0.5; cursor: default; }
+  #msg { opacity: 0.75; }
+</style>
+</head>
+<body>
+<div class="row"><button id="btn" disabled>…</button><span id="msg"></span></div>
+<script>
+  // Giao thức component Streamlit tối giản (không cần build/npm).
+  const post = (type, data = {}) => window.parent.postMessage({ isStreamlitMessage: true, type, ...data }, "*");
+  const setValue = (value) => post("streamlit:setComponentValue", { value, dataType: "json" });
+  const setHeight = () => post("streamlit:setFrameHeight", { height: document.body.scrollHeight });
+
+  const btn = document.getElementById("btn");
+  const msg = document.getElementById("msg");
+  let publicKey = null;
+  let started = false;
+  let busy = false;
+
+  const b64urlToBytes = (s) => {
+    const raw = atob((s + "=".repeat((4 - (s.length % 4)) % 4)).replace(/-/g, "+").replace(/_/g, "/"));
+    return Uint8Array.from(raw, (c) => c.charCodeAt(0));
+  };
+  const bytesToB64url = (buf) =>
+    btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const sameKey = (sub) => sub.options.applicationServerKey &&
+    bytesToB64url(sub.options.applicationServerKey) === publicKey;
+
+  function show(state, note = "") {
+    const on = state === "on";
+    btn.textContent = on ? "🔕 Tắt thông báo trên trình duyệt này" : "🔔 Bật thông báo trình duyệt";
+    btn.className = on ? "" : "primary";
+    btn.disabled = busy || state === "unsupported" || state === "denied";
+    btn.dataset.state = state;
+    msg.textContent = note || (on ? "Trình duyệt này đang nhận thông báo." : "");
+    setHeight();
+  }
+
+  function report(action, data) {
+    setValue({ action, nonce: Date.now() + Math.random(), ua: navigator.userAgent, ...data });
+  }
+
+  async function currentSubscription() {
+    const reg = await navigator.serviceWorker.getRegistration();
+    return reg ? reg.pushManager.getSubscription() : null;
+  }
+
+  async function init() {
+    if (!window.isSecureContext) return show("unsupported", "Cần HTTPS (hoặc localhost) để dùng thông báo trình duyệt.");
+    if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) {
+      return show("unsupported", "Trình duyệt này không hỗ trợ Web Push.");
+    }
+    if (Notification.permission === "denied") {
+      return show("denied", "Bạn đã chặn thông báo cho trang này — cho phép lại trong cài đặt trang web của trình duyệt.");
+    }
+    const sub = await currentSubscription();
+    if (sub && sameKey(sub) && Notification.permission === "granted") {
+      report("sync", { subscription: sub.toJSON() });  // ghi lại nếu máy chủ mất CSDL
+      return show("on");
+    }
+    show("off");
+  }
+
+  async function enable() {
+    const perm = await Notification.requestPermission();
+    if (perm !== "granted") {
+      return show(perm === "denied" ? "denied" : "off", "Chưa được cấp quyền thông báo.");
+    }
+    await navigator.serviceWorker.register("./sw.js");
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (sub && !sameKey(sub)) {  // khóa máy chủ đã đổi -> đăng ký lại
+      await sub.unsubscribe();
+      sub = null;
+    }
+    sub = sub || await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64urlToBytes(publicKey) });
+    report("subscribe", { subscription: sub.toJSON() });
+    show("on");
+  }
+
+  async function disable() {
+    const sub = await currentSubscription();
+    if (sub) {
+      const endpoint = sub.endpoint;
+      await sub.unsubscribe();
+      report("unsubscribe", { endpoint });
+    }
+    show("off");
+  }
+
+  btn.addEventListener("click", async () => {
+    const turnOn = btn.dataset.state !== "on";
+    busy = true;
+    show(btn.dataset.state, "Đang xử lý…");
+    try {
+      await (turnOn ? enable() : disable());
+    } catch (err) {
+      busy = false;
+      show("off", "Lỗi: " + (err && err.message ? err.message : err));
+      return;
+    }
+    busy = false;
+    show(btn.dataset.state);
+  });
+
+  window.addEventListener("message", (event) => {
+    if (event.data?.type !== "streamlit:render") return;
+    const theme = event.data.theme;
+    if (theme) {
+      const root = document.documentElement.style;
+      if (theme.textColor) root.setProperty("--text", theme.textColor);
+      if (theme.primaryColor) root.setProperty("--primary", theme.primaryColor);
+      if (theme.font) root.setProperty("--font", theme.font);
+    }
+    publicKey = event.data.args.public_key;
+    if (!started) {
+      started = true;
+      init().catch((err) => show("off", "Lỗi: " + err.message));
+    }
+  });
+
+  post("streamlit:componentReady", { apiVersion: 1 });
+  setHeight();
+</script>
+</body>
+</html>

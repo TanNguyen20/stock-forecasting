@@ -1,4 +1,4 @@
-"""Gửi thông báo qua Email (SMTP) và thông báo Windows (toast)."""
+"""Gửi thông báo qua Email (SMTP), thông báo Windows (toast) và thông báo trình duyệt (Web Push)."""
 from __future__ import annotations
 
 import html
@@ -8,15 +8,18 @@ import ssl
 import sys
 from email.message import EmailMessage
 
+from . import webpush
 from .config import Settings
+from .db import Repository
 from .models import Channel
 
 log = logging.getLogger(__name__)
 
 
 class Notifier:
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, repo: Repository | None = None):
         self.s = settings
+        self.webpush = webpush.WebPush(settings, repo) if repo is not None else None
 
     def available(self) -> dict[Channel, bool]:
         return {ch: self.unavailable_reason(ch) is None for ch in Channel}
@@ -25,6 +28,14 @@ class Notifier:
         """None nếu kênh dùng được, ngược lại là lý do để hiện cho người dùng."""
         if ch is Channel.EMAIL:
             return None if self.s.email_enabled else "chưa cấu hình SMTP_HOST / SMTP_TO"
+        if ch is Channel.WEBPUSH:
+            if not webpush.supported():
+                return "thiếu gói pywebpush"
+            if self.webpush is None:
+                return "chưa gắn CSDL lưu đăng ký"
+            if not self.webpush.repo.push_subscriptions():
+                return "chưa có trình duyệt nào bật — bấm «Bật thông báo trình duyệt» ở trang Cài đặt"
+            return None
         if not self.s.toast_enabled:
             return "đã tắt bằng TOAST_ENABLED=false"
         if sys.platform != "win32":
@@ -45,6 +56,8 @@ class Notifier:
                     self.send_email(title, body)
                 elif ch is Channel.TOAST:
                     self.send_toast(title, body)
+                elif ch is Channel.WEBPUSH:
+                    self.send_webpush(title, body)
                 result[ch] = "ok"
             except Exception as exc:  # noqa: BLE001
                 log.error("Gửi %s thất bại: %s", ch, exc)
@@ -81,6 +94,12 @@ class Notifier:
         if self.s.smtp_user:
             smtp.login(self.s.smtp_user, self.s.smtp_password)
         smtp.send_message(msg)
+
+    # ---- Web Push
+    def send_webpush(self, title: str, body: str) -> int:
+        if reason := self.unavailable_reason(Channel.WEBPUSH):
+            raise RuntimeError(f"Thông báo trình duyệt không khả dụng: {reason}")
+        return self.webpush.send(title, body)
 
     # ---- Windows toast
     def send_toast(self, title: str, body: str) -> None:

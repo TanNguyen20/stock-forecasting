@@ -67,6 +67,13 @@ CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
     value TEXT
 );
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+    endpoint TEXT PRIMARY KEY,
+    p256dh TEXT NOT NULL,
+    auth TEXT NOT NULL,
+    user_agent TEXT DEFAULT '',
+    created_at TEXT NOT NULL
+);
 """
 
 PRICE_COLUMNS = ["open", "high", "low", "close", "volume"]
@@ -107,6 +114,12 @@ class Repository:
     def set_meta(self, key: str, value: str) -> None:
         with self._conn() as conn:
             conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", (key, value))
+
+    def setdefault_meta(self, key: str, value: str) -> str:
+        """Ghi `value` nếu khóa chưa có; trả về giá trị đang lưu (an toàn khi nhiều luồng cùng ghi)."""
+        with self._conn() as conn:
+            conn.execute("INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)", (key, value))
+            return conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()[0]
 
     # ---------- Giá lịch sử ----------
     def upsert_prices(self, symbol: str, df: pd.DataFrame, source: str) -> int:
@@ -257,6 +270,25 @@ class Repository:
     def delete_alert(self, alert_id: int) -> None:
         with self._conn() as conn:
             conn.execute("DELETE FROM alerts WHERE id = ?", (alert_id,))
+
+    # ---------- Đăng ký Web Push ----------
+    def add_push_subscription(self, endpoint: str, p256dh: str, auth: str, user_agent: str = "") -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT INTO push_subscriptions (endpoint, p256dh, auth, user_agent, created_at)"
+                " VALUES (?, ?, ?, ?, ?) ON CONFLICT(endpoint) DO UPDATE SET"
+                " p256dh = excluded.p256dh, auth = excluded.auth, user_agent = excluded.user_agent",
+                (endpoint, p256dh, auth, user_agent, now_vn().isoformat()),
+            )
+
+    def remove_push_subscription(self, endpoint: str) -> None:
+        with self._conn() as conn:
+            conn.execute("DELETE FROM push_subscriptions WHERE endpoint = ?", (endpoint,))
+
+    def push_subscriptions(self) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute("SELECT * FROM push_subscriptions ORDER BY created_at").fetchall()
+        return [dict(r) for r in rows]
 
     def log_alert(self, alert_id: int | None, symbol: str, message: str, value: float | None,
                   channels: str, status: str) -> None:

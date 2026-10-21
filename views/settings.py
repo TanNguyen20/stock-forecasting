@@ -9,6 +9,7 @@ from stockvn.forecast import ALL_MODELS
 from stockvn.models import CHANNEL_LABELS, Channel
 from stockvn.service import HEARTBEAT_KEY
 from views.common import fmt_time, get_app, symbol_table, worker_state_label
+from views.webpush_ui import webpush_toggle
 
 app = get_app()
 repo = app.repo
@@ -33,6 +34,16 @@ with c2, st.container(border=True):
         st.caption(f"Lý do: {reason}.")
     st.caption("Hiện popup ở góc màn hình của chính máy đang chạy app (cần Windows). Chỉ hoạt động khi máy bật "
                "và worker đang chạy. Tắt bằng `TOAST_ENABLED=false` trong `.env`.")
+
+with st.container(border=True):
+    header = st.empty()  # điền sau webpush_toggle để phản ánh đăng ký vừa thêm/xóa
+    st.caption("Popup của hệ điều hành (Windows, macOS, Android) do máy chủ đẩy qua dịch vụ push của trình duyệt — "
+               "dùng được cả khi máy chủ chạy Linux (vd. Streamlit Cloud). Không cần mở tab app nhưng trình duyệt "
+               "phải đang chạy. Bật riêng trên từng trình duyệt/thiết bị muốn nhận.")
+    webpush_toggle(app)
+    subs = repo.push_subscriptions()
+    status = f"✅ {len(subs)} trình duyệt đã bật" if subs else "❌ Chưa có trình duyệt nào bật"
+    header.markdown(f"**{CHANNEL_LABELS[Channel.WEBPUSH]}** (Web Push) — {status}")
 
 st.code(
     "SMTP_HOST=smtp.gmail.com\nSMTP_PORT=465\nSMTP_USE_SSL=true\n"

@@ -132,8 +132,7 @@ else:
 
 # ---- Gửi thử
 with st.expander("🧪 Gửi thông báo thử"):
-    c1, c2 = st.columns(2)
-    for col, ch in zip((c1, c2), Channel):
+    for col, ch in zip(st.columns(len(Channel)), Channel):
         if col.button(f"Gửi thử {CHANNEL_LABELS[ch]}", disabled=not available[ch], width="stretch"):
             res = app.notifier.send((ch,), "Thử nghiệm cảnh báo", "Nếu bạn nhận được thông báo này, kênh đã hoạt động.")
             (col.success if res[ch] == "ok" else col.error)(f"{CHANNEL_LABELS[ch]}: {res[ch]}")
