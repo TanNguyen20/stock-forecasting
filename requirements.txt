@@ -10,3 +10,5 @@ scikit-learn>=1.4
 python-dotenv>=1.0
 winotify>=1.1; sys_platform == "win32"
 pywebpush>=2.0
+prophet>=1.1
+torch>=2.2
