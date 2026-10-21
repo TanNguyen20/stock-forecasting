@@ -65,11 +65,13 @@ with st.container(border=True):
             c3.caption(f"Giá hiện tại: **{fmt_price(quote.price, idx)}** ({quote.date.strftime('%d/%m')})")
         channels = c4.multiselect(
             "Kênh thông báo", list(Channel), format_func=lambda c: CHANNEL_LABELS[c],
-            default=[c for c in Channel if available[c]] or [Channel.TOAST],
+            default=[c for c in Channel if available[c]],
         )
+        if not any(available.values()):
+            c4.caption("⚠️ Chưa có kênh nào dùng được — cấu hình Email ở trang Cài đặt.")
         for ch in channels:
-            if not available[ch]:
-                c4.caption(f"⚠️ {CHANNEL_LABELS[ch]} chưa được cấu hình — xem trang Cài đặt.")
+            if reason := app.notifier.unavailable_reason(ch):
+                c4.caption(f"⚠️ {CHANNEL_LABELS[ch]}: {reason}.")
         note = st.text_input("Ghi chú (tùy chọn)", placeholder="Ví dụ: chốt lời một phần")
         if st.form_submit_button("➕ Tạo cảnh báo", type="primary"):
             if not channels:
@@ -135,8 +137,8 @@ with st.expander("🧪 Gửi thông báo thử"):
         if col.button(f"Gửi thử {CHANNEL_LABELS[ch]}", disabled=not available[ch], width="stretch"):
             res = app.notifier.send((ch,), "Thử nghiệm cảnh báo", "Nếu bạn nhận được thông báo này, kênh đã hoạt động.")
             (col.success if res[ch] == "ok" else col.error)(f"{CHANNEL_LABELS[ch]}: {res[ch]}")
-        if not available[ch]:
-            col.caption("Chưa cấu hình")
+        if reason := app.notifier.unavailable_reason(ch):
+            col.caption(reason[:1].upper() + reason[1:])
 
 # ---- Nhật ký
 st.subheader("Nhật ký cảnh báo")

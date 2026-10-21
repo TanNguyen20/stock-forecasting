@@ -1,3 +1,4 @@
+import sys
 from datetime import datetime
 
 import pandas as pd
@@ -12,6 +13,7 @@ from views.common import fmt_time, get_app, symbol_table, worker_state_label
 app = get_app()
 repo = app.repo
 s = get_settings()
+on_windows = sys.platform == "win32"
 
 st.title("⚙️ Cài đặt & dữ liệu")
 
@@ -23,19 +25,21 @@ with c1, st.container(border=True):
     st.markdown(f"**{CHANNEL_LABELS[Channel.EMAIL]}** — {'✅ Đã cấu hình' if avail[Channel.EMAIL] else '❌ Chưa cấu hình'}")
     if avail[Channel.EMAIL]:
         st.caption(f"Máy chủ: `{s.smtp_host}:{s.smtp_port}` · Gửi tới: {', '.join(s.smtp_to)}")
-    st.caption("Khai báo trong file `.env` (xem `.env.example`). Với Gmail, dùng **Mật khẩu ứng dụng** "
-               "(App Password), không dùng mật khẩu đăng nhập.")
+    st.caption("Khai báo trong file `.env` (xem `.env.example`), hoặc ở **Settings → Secrets** khi chạy trên "
+               "Streamlit Cloud. Với Gmail, dùng **Mật khẩu ứng dụng** (App Password), không dùng mật khẩu đăng nhập.")
 with c2, st.container(border=True):
     st.markdown(f"**{CHANNEL_LABELS[Channel.TOAST]}** — {'✅ Sẵn sàng' if avail[Channel.TOAST] else '❌ Không khả dụng'}")
-    st.caption("Hiện popup ở góc màn hình Windows. Chỉ hoạt động khi máy tính bật và worker đang chạy. "
-               "Tắt bằng `TOAST_ENABLED=false` trong `.env`.")
+    if reason := app.notifier.unavailable_reason(Channel.TOAST):
+        st.caption(f"Lý do: {reason}.")
+    st.caption("Hiện popup ở góc màn hình của chính máy đang chạy app (cần Windows). Chỉ hoạt động khi máy bật "
+               "và worker đang chạy. Tắt bằng `TOAST_ENABLED=false` trong `.env`.")
 
 st.code(
     "SMTP_HOST=smtp.gmail.com\nSMTP_PORT=465\nSMTP_USE_SSL=true\n"
     "SMTP_USER=ban@gmail.com\nSMTP_PASSWORD=mat-khau-ung-dung-16-ky-tu\nSMTP_TO=ban@gmail.com",
     language="ini",
 )
-st.caption("Sau khi sửa `.env`, khởi động lại ứng dụng và worker để áp dụng.")
+st.caption("Sau khi sửa `.env` hoặc Secrets, khởi động lại ứng dụng và worker để áp dụng.")
 
 # ---- Worker
 st.subheader("Worker nền (gửi cảnh báo tự động)")
@@ -46,14 +50,26 @@ st.markdown(
     f"""
 Worker cập nhật giá mỗi **{s.poll_seconds} giây** trong giờ giao dịch (9:00–11:30, 13:00–15:00, thứ 2–6)
 cho các mã trong danh mục và các mã có cảnh báo, rồi gửi thông báo khi điều kiện thỏa.
-
-- Mặc định worker **chạy kèm giao diện**: `run_app.bat` (hoặc `.venv\\Scripts\\python app.py`) khởi động cả hai.
-  Tắt bằng `STOCK_EMBED_WORKER=false` trong `.env`.
-- Chạy riêng không cần giao diện: mở terminal tại `{ROOT}` và chạy `run_worker.bat`.
-  Mỗi CSDL chỉ có một worker hoạt động; worker đến sau tự chờ và tiếp quản khi worker trước dừng.
-- Tự khởi động cùng Windows: dùng **Task Scheduler** → *Create Task* → Trigger *At log on* → Action chạy `run_worker.bat`.
+Mặc định worker **chạy kèm giao diện** (tắt bằng `STOCK_EMBED_WORKER=false`) và dừng khi app dừng.
+Mỗi CSDL chỉ có một worker hoạt động; worker đến sau tự chờ và tiếp quản khi worker trước dừng.
 """
 )
+if on_windows:
+    st.markdown(
+        f"""
+- `run_app.bat` (hoặc `.venv\\Scripts\\python app.py`) khởi động giao diện và worker cùng lúc.
+- Chạy riêng không cần giao diện: mở terminal tại `{ROOT}` và chạy `run_worker.bat`.
+- Tự khởi động cùng Windows: dùng **Task Scheduler** → *Create Task* → Trigger *At log on* → Action chạy `run_worker.bat`.
+"""
+    )
+else:
+    st.markdown(
+        """
+- Trên **Streamlit Community Cloud**, app ngủ sau 12 giờ không có truy cập — worker dừng theo, cảnh báo không
+  được gửi cho tới khi có người mở lại app.
+- Trên máy chủ tự quản: chạy `python worker.py` như một dịch vụ nền (vd. systemd) để cảnh báo không phụ thuộc giao diện.
+"""
+    )
 if st.button("▶️ Chạy một vòng ngay"):
     with st.spinner("Đang cập nhật giá & kiểm tra cảnh báo…"):
         res = app.run_cycle()

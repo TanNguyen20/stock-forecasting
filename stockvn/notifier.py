@@ -19,7 +19,22 @@ class Notifier:
         self.s = settings
 
     def available(self) -> dict[Channel, bool]:
-        return {Channel.EMAIL: self.s.email_enabled, Channel.TOAST: self.toast_supported()}
+        return {ch: self.unavailable_reason(ch) is None for ch in Channel}
+
+    def unavailable_reason(self, ch: Channel) -> str | None:
+        """None nếu kênh dùng được, ngược lại là lý do để hiện cho người dùng."""
+        if ch is Channel.EMAIL:
+            return None if self.s.email_enabled else "chưa cấu hình SMTP_HOST / SMTP_TO"
+        if not self.s.toast_enabled:
+            return "đã tắt bằng TOAST_ENABLED=false"
+        if sys.platform != "win32":
+            return ("máy chủ không chạy Windows (vd. Streamlit Cloud) — popup chỉ hiện trên máy đang chạy app, "
+                    "hãy dùng Email")
+        try:
+            import winotify  # noqa: F401
+        except ImportError:
+            return "thiếu gói winotify"
+        return None
 
     def send(self, channels: tuple[Channel, ...], title: str, body: str) -> dict[Channel, str]:
         """Trả về trạng thái từng kênh: 'ok' hoặc thông báo lỗi. Không ném ngoại lệ."""
@@ -68,18 +83,9 @@ class Notifier:
         smtp.send_message(msg)
 
     # ---- Windows toast
-    def toast_supported(self) -> bool:
-        if not (self.s.toast_enabled and sys.platform == "win32"):
-            return False
-        try:
-            import winotify  # noqa: F401
-        except ImportError:
-            return False
-        return True
-
     def send_toast(self, title: str, body: str) -> None:
-        if not self.toast_supported():
-            raise RuntimeError("Thông báo Windows không khả dụng (cần Windows + gói winotify)")
+        if reason := self.unavailable_reason(Channel.TOAST):
+            raise RuntimeError(f"Thông báo Windows không khả dụng: {reason}")
         from winotify import Notification, audio
 
         toast = Notification(app_id=self.s.toast_app_id, title=title, msg=body[:250], duration="long")
