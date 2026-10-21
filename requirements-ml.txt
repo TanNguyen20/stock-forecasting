@@ -1,0 +1,4 @@
+# Mô hình nặng (tùy chọn): Prophet và LSTM
+-r requirements.txt
+prophet>=1.1
+torch>=2.2

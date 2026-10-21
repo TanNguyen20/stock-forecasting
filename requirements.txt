@@ -1,0 +1,11 @@
+# Lõi: thu thập, cảnh báo, giao diện, mô hình thống kê + ML
+requests>=2.31
+pandas>=2.2
+numpy>=1.26
+scipy>=1.11
+streamlit>=1.50
+plotly>=5.20
+statsmodels>=0.14
+scikit-learn>=1.4
+python-dotenv>=1.0
+winotify>=1.1; sys_platform == "win32"

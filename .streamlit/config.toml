@@ -1,0 +1,12 @@
+[server]
+headless = true
+port = 8501
+
+[client]
+toolbarMode = "minimal"
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+primaryColor = "#2563eb"

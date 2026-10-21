@@ -1,0 +1,10 @@
+[project]
+name = "stockvn"
+version = "0.1.0"
+description = "Thu thập, cảnh báo giá và dự báo cổ phiếu Việt Nam"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]
