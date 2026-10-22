@@ -6,7 +6,9 @@ from plotly.subplots import make_subplots
 
 from stockvn.indicators import add_indicators
 from stockvn.market import fmt_volume, is_index
-from views.common import DISCLAIMER, DOWN, UP, fmt_pct, fmt_price, get_app, load_history, symbol_picker
+from views.common import (
+    DISCLAIMER, DOWN, UP, date_breaks, fmt_pct, fmt_price, get_app, load_history, symbol_picker,
+)
 
 app = get_app()
 st.title("📈 Biểu đồ & chỉ báo kỹ thuật")
@@ -99,8 +101,8 @@ fig.update_layout(
     height=420 + 160 * len(panels), margin=dict(l=10, r=10, t=30, b=10), xaxis_rangeslider_visible=False,
     legend=dict(orientation="h", y=1.02, x=0), hovermode="x unified", separators=",.",
 )
-# Ẩn cuối tuần để biểu đồ liền mạch
-fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
+# Ẩn cuối tuần và ngày nghỉ lễ để biểu đồ liền mạch
+fig.update_xaxes(rangebreaks=date_breaks(view.index))
 st.plotly_chart(fig, width="stretch")
 
 with st.expander("📄 Dữ liệu"):

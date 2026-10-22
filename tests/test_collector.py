@@ -6,6 +6,9 @@ import pytest
 from stockvn.collector import (
     Collector, SourceError, build_quote, parse_dnse, parse_kbs, parse_vci, parse_vci_symbols,
 )
+from stockvn.market import today_vn
+
+from .conftest import make_prices
 
 VCI_PAYLOAD = [{
     "symbol": "VNM", "o": [59400, 59000], "h": [59600, 59000], "l": [58500, 57300], "c": [58600, 57300],
@@ -88,3 +91,51 @@ def test_refresh_quote_persists(repo, prices):
     q = c.refresh_quote("FPT")
     assert repo.get_quotes(["FPT"])["FPT"].price == q.price
     assert repo.price_range("FPT")[2] == 30
+
+
+def _past_prices(n: int = 30, scale: float = 1.0) -> pd.DataFrame:
+    """n phiên kết thúc trước hôm nay (không có phiên hôm nay)."""
+    df = make_prices(n)
+    df.index = pd.bdate_range(end=pd.Timestamp(today_vn()) - pd.Timedelta(days=1), periods=n, name="date")
+    df[["open", "high", "low", "close"]] *= scale
+    return df
+
+
+def _collector_with(repo, fresh: pd.DataFrame, name: str = "VCI"):
+    c = Collector(repo)
+    c.sources = [_Src(name, fresh)]
+    full_syncs: list[str] = []
+    c.sync_history = lambda symbol, years=10, full=False: full_syncs.append(symbol) or 0  # type: ignore[method-assign]
+    return c, full_syncs
+
+
+def test_adjusted_history_triggers_full_reload(repo):
+    stored = _past_prices()
+    repo.upsert_prices("FPT", stored, "VCI")
+    c, full_syncs = _collector_with(repo, _past_prices(scale=0.95))  # nguồn hạ giá quá khứ 5% (chia cổ tức)
+    c.refresh_quote("FPT")
+    assert full_syncs == ["FPT"]
+
+
+def test_same_history_is_upserted_without_reload(repo):
+    repo.upsert_prices("FPT", _past_prices(), "VCI")
+    c, full_syncs = _collector_with(repo, _past_prices())
+    c.refresh_quote("FPT")
+    assert full_syncs == []
+
+
+def test_single_stale_session_is_not_an_adjustment(repo):
+    stored = _past_prices()
+    stored.iloc[-1, stored.columns.get_loc("close")] *= 1.03  # phiên cuối lưu giữa giờ, giá đóng cửa khác
+    repo.upsert_prices("FPT", stored, "VCI")
+    c, full_syncs = _collector_with(repo, _past_prices())
+    c.refresh_quote("FPT")
+    assert full_syncs == []
+    assert repo.get_prices("FPT")["close"].iloc[-1] == pytest.approx(_past_prices()["close"].iloc[-1])
+
+
+def test_different_source_is_not_compared(repo):
+    repo.upsert_prices("FPT", _past_prices(), "DNSE")
+    c, full_syncs = _collector_with(repo, _past_prices(scale=0.9), name="VCI")
+    c.refresh_quote("FPT")
+    assert full_syncs == []

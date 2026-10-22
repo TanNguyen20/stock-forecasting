@@ -1,10 +1,14 @@
+import sqlite3
 from dataclasses import replace
-from datetime import date
+from datetime import date, datetime
 
+import numpy as np
+import pandas as pd
 import pytest
 
 from stockvn.alerts import AlertEngine, format_message, is_met, metric_value
-from stockvn.market import now_vn
+from stockvn.db import Repository
+from stockvn.market import VN_TZ, now_vn
 from stockvn.models import Alert, AlertKind, Channel, Quote
 
 
@@ -101,3 +105,95 @@ def test_repository_roundtrip(repo, prices):
     assert (a.id, a.symbol, a.kind, a.channels) == (alert_id, "VNM", AlertKind.RSI_BELOW, (Channel.EMAIL, Channel.TOAST))
     repo.delete_alert(alert_id)
     assert repo.list_alerts() == []
+
+
+def history(closes, end: date = date(2026, 10, 6)) -> pd.DataFrame:
+    """Lịch sử giá kết thúc trước ngày của `quote()` (07/10/2026)."""
+    c = np.asarray(closes, dtype=float)
+    idx = pd.bdate_range(end=pd.Timestamp(end), periods=len(c), name="date")
+    return pd.DataFrame({"open": c, "high": c * 1.01, "low": c * 0.99, "close": c, "volume": 1e6}, index=idx)
+
+
+@pytest.mark.parametrize("kind,price,threshold,expected", [
+    (AlertKind.ABOVE_SMA, 51_000, 0, True),    # SMA20 = 50.000 -> trên 2%
+    (AlertKind.ABOVE_SMA, 51_000, 3, False),
+    (AlertKind.ABOVE_SMA, 49_000, 0, False),
+    (AlertKind.BELOW_SMA, 49_000, 0, True),    # dưới 2%
+    (AlertKind.BELOW_SMA, 49_000, 2.5, False),
+])
+def test_sma_conditions(kind, price, threshold, expected):
+    value = metric_value(kind, quote(price), history([50_000] * 40), param=20)
+    assert is_met(kind, value, threshold) is expected
+
+
+def test_sma_needs_enough_history():
+    assert metric_value(AlertKind.ABOVE_SMA, quote(51_000), history([50_000] * 10), param=50) is None
+
+
+def test_52_week_high_and_low_ignore_today():
+    h = history([50_000] * 300)  # đỉnh 50.500, đáy 49.500
+    assert metric_value(AlertKind.HIGH_52W, quote(51_005), h) == pytest.approx(1.0)
+    assert metric_value(AlertKind.HIGH_52W, quote(50_000), h) < 0
+    assert metric_value(AlertKind.LOW_52W, quote(49_005), h) == pytest.approx(1.0)
+    # Phiên hôm nay đã lưu (đỉnh trong phiên = giá hiện tại) không được tính vào đỉnh "trước đó".
+    today = history([60_000], end=date(2026, 10, 7))
+    assert metric_value(AlertKind.HIGH_52W, quote(51_005), pd.concat([h, today])) == pytest.approx(1.0)
+
+
+def test_trailing_stop_uses_peak_since_creation():
+    h = history([50_000] * 20 + [60_000] * 5 + [56_000] * 5)
+    peak_day = h.index[20].date()
+    assert metric_value(AlertKind.TRAILING_STOP, quote(54_000), h, since=peak_day) == pytest.approx(10.0)
+    after_peak = h.index[-5].date()
+    assert metric_value(AlertKind.TRAILING_STOP, quote(54_000), h, since=after_peak) == pytest.approx(
+        (1 - 54_000 / 56_000) * 100)
+
+
+def test_ceiling_and_floor():
+    assert is_met(AlertKind.CEILING, metric_value(AlertKind.CEILING, quote(53_450), band=7), 0.3)  # +6,9%
+    assert not is_met(AlertKind.CEILING, metric_value(AlertKind.CEILING, quote(52_000), band=7), 0.3)
+    assert is_met(AlertKind.FLOOR, metric_value(AlertKind.FLOOR, quote(46_525), band=7), 0.3)  # -6,95%
+    assert metric_value(AlertKind.CEILING, quote(53_450)) is None  # không rõ sàn
+    assert metric_value(AlertKind.CEILING, replace(quote(53_450), symbol="VNINDEX"), band=7) is None
+
+
+def test_engine_ceiling_reads_exchange_from_symbols(repo):
+    repo.upsert_symbols(pd.DataFrame([{"symbol": "FPT", "exchange": "HOSE", "type": "STOCK", "name": "FPT"}]))
+    repo.add_alert(Alert("FPT", AlertKind.CEILING, 0.3))
+    assert len(AlertEngine(repo, FakeNotifier()).check({"FPT": quote(53_500)})) == 1
+
+
+def test_engine_sma_alert_and_message(repo):
+    repo.upsert_prices("FPT", history([50_000] * 60), "TEST")
+    repo.add_alert(Alert("FPT", AlertKind.ABOVE_SMA, 0, param=50))
+    fired = AlertEngine(repo, FakeNotifier()).check({"FPT": quote(51_000)})
+    assert len(fired) == 1
+    assert "SMA50" in fired[0].title and "trên SMA50" in fired[0].body
+
+
+def test_engine_trailing_stop_from_created_at(repo):
+    repo.upsert_prices("FPT", history([50_000] * 20 + [60_000] * 5), "TEST")
+    created = datetime(2026, 9, 1, tzinfo=VN_TZ)
+    repo.add_alert(Alert("FPT", AlertKind.TRAILING_STOP, 8, created_at=created))
+    engine = AlertEngine(repo, FakeNotifier())
+    assert engine.check({"FPT": quote(57_000)}) == []  # -5%
+    assert len(engine.check({"FPT": quote(55_000)})) == 1  # -8,3%
+
+
+def test_alert_param_roundtrip_and_label(repo):
+    repo.add_alert(Alert("FPT", AlertKind.BELOW_SMA, 1.5, param=200))
+    a = repo.list_alerts()[0]
+    assert a.param == 200 and a.label == "Giá cắt xuống SMA200 (dưới ≥ x%)"
+
+
+def test_old_database_gets_param_column(tmp_path):
+    path = tmp_path / "old.db"
+    with sqlite3.connect(path) as conn:
+        conn.execute("CREATE TABLE alerts (id INTEGER PRIMARY KEY AUTOINCREMENT, symbol TEXT NOT NULL,"
+                     " kind TEXT NOT NULL, threshold REAL NOT NULL, channels TEXT NOT NULL, note TEXT DEFAULT '',"
+                     " active INTEGER NOT NULL DEFAULT 1, armed INTEGER NOT NULL DEFAULT 1,"
+                     " created_at TEXT NOT NULL, last_triggered_at TEXT)")
+        conn.execute("INSERT INTO alerts (symbol, kind, threshold, channels, created_at)"
+                     " VALUES ('FPT', 'price_above', 1, 'toast', '2026-01-01T00:00:00+07:00')")
+    repo = Repository(path)
+    assert repo.list_alerts()[0].param is None

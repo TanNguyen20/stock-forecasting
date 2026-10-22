@@ -32,9 +32,12 @@ st.set_page_config(page_title="Chứng khoán VN", page_icon="📈", layout="wid
 
 pages = [
     st.Page("views/dashboard.py", title="Tổng quan", icon="📊", default=True),
+    st.Page("views/portfolio.py", title="Danh mục đầu tư", icon="💼"),
     st.Page("views/chart.py", title="Biểu đồ & chỉ báo", icon="📈"),
+    st.Page("views/screener.py", title="Bộ lọc cổ phiếu", icon="🔎"),
     st.Page("views/alerts.py", title="Cảnh báo giá", icon="🔔"),
     st.Page("views/forecast.py", title="Dự báo", icon="🔮"),
+    st.Page("views/backtest.py", title="Backtest chiến lược", icon="🧪"),
     st.Page("views/settings.py", title="Cài đặt", icon="⚙️"),
 ]
 nav = st.navigation(pages)

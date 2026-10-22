@@ -51,6 +51,12 @@ class Settings:
     ntfy_topic: str
     ntfy_token: str
 
+    trade_fee_pct: float  # phí môi giới mỗi chiều (% giá trị lệnh)
+    sell_tax_pct: float  # thuế khi bán (% giá trị bán)
+    digest_channels: tuple[str, ...]  # kênh gửi báo cáo cuối phiên; rỗng = tắt
+    forecast_log_models: tuple[str, ...]  # mô hình worker tự dự báo mỗi tối; rỗng = tắt
+    forecast_log_horizon: int
+
     @property
     def email_enabled(self) -> bool:
         return bool(self.smtp_host and self.smtp_to)
@@ -85,4 +91,9 @@ def get_settings() -> Settings:
         ntfy_server=env("NTFY_SERVER", "") or "https://ntfy.sh",
         ntfy_topic=env("NTFY_TOPIC", "").strip(),
         ntfy_token=env("NTFY_TOKEN", "").strip(),
+        trade_fee_pct=float(env("TRADE_FEE_PCT", "0.15")),
+        sell_tax_pct=float(env("SELL_TAX_PCT", "0.1")),
+        digest_channels=_list(env("DIGEST_CHANNELS")),
+        forecast_log_models=_list(env("FORECAST_LOG_MODELS", "naive,ets,arima,gbm")),
+        forecast_log_horizon=int(env("FORECAST_LOG_HORIZON", "20")),
     )

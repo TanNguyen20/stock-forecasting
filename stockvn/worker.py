@@ -10,11 +10,13 @@ import logging
 import sys
 import threading
 from collections.abc import Callable
+from datetime import date
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import IO
 
 from .config import get_settings
+from .digest import parse_channels, send_digest
 from .market import is_trading_day, is_trading_time, now_vn, session_label
 from .service import App, create_app
 
@@ -92,6 +94,23 @@ def run_cycle(app: App) -> None:
     log.info("Đã cập nhật %d mã, lỗi %d, cảnh báo bắn %d", len(res.quotes), len(res.errors), len(res.fired))
 
 
+def end_of_day(app: App, day: date) -> None:
+    """Sau khi chốt giá: gửi báo cáo cuối phiên, rồi dự báo và ghi sổ cho các mã đang theo dõi."""
+    s = get_settings()
+    try:
+        send_digest(app.repo, app.notifier, day, parse_channels(s.digest_channels),
+                    sell_cost_pct=s.trade_fee_pct + s.sell_tax_pct)
+    except Exception:  # noqa: BLE001 - lỗi báo cáo không được chặn phần dự báo
+        log.exception("Gửi báo cáo cuối phiên lỗi")
+    if s.forecast_log_models:
+        from .forecast.ledger import auto_forecast  # nạp scipy/statsmodels chỉ khi cần
+
+        log.info("Dự báo cuối ngày (%s, %d phiên)", ",".join(s.forecast_log_models), s.forecast_log_horizon)
+        for sym, err in auto_forecast(app.repo, app.tracked_symbols(), s.forecast_log_models,
+                                      s.forecast_log_horizon).items():
+            log.warning("Dự báo %s: %s", sym, err)
+
+
 def _sleep(stop: threading.Event, seconds: int) -> None:
     # Chờ từng giây để Ctrl+C trên Windows được xử lý kịp ở luồng chính.
     for _ in range(seconds):
@@ -111,6 +130,7 @@ def run_loop(app: App, stop: threading.Event, interval: int, force: bool = False
                 log.info("Chốt giá cuối ngày")
                 run_cycle(app)
                 app.repo.set_meta(EOD_KEY, now.date().isoformat())
+                end_of_day(app, now.date())
             else:
                 wait = IDLE_SLEEP
                 if (label := session_label(now)) != last_label:

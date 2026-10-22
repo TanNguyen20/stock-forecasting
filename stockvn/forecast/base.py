@@ -9,6 +9,8 @@ from typing import ClassVar
 import numpy as np
 import pandas as pd
 
+from ..market import holidays
+
 Arr = np.ndarray
 
 
@@ -29,8 +31,9 @@ class ForecastResult:
 
 
 def future_business_days(last: pd.Timestamp, horizon: int) -> pd.DatetimeIndex:
-    """Các ngày giao dịch tiếp theo (bỏ thứ 7, CN; chưa trừ ngày lễ)."""
-    return pd.bdate_range(last + pd.Timedelta(days=1), periods=horizon, name="date")
+    """Các ngày giao dịch tiếp theo (bỏ thứ 7, CN và ngày nghỉ lễ trong holidays.txt)."""
+    return pd.bdate_range(last + pd.Timedelta(days=1), periods=horizon, freq="C",
+                          holidays=sorted(holidays()), name="date")
 
 
 def quantiles_to_prices(last_price: float, cum_logret: Arr, lo: Arr | None, hi: Arr | None):
