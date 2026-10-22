@@ -1,11 +1,15 @@
+from datetime import time, timedelta
+
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
 from stockvn.forecast import ALL_MODELS, DEFAULT_MODELS, available_models, run_forecast
-from stockvn.market import is_index
-from views.common import DISCLAIMER, fmt_pct, fmt_price, load_history, symbol_picker
+from stockvn.forecast.ledger import mape_by_step, record, score_outcomes
+from stockvn.market import fmt_volume, is_index, now_vn
+from views.common import DISCLAIMER, date_breaks, fmt_pct, fmt_price, get_app, load_history, symbol_picker
 
+repo = get_app().repo
 st.title("🔮 Dự báo giá")
 st.warning(DISCLAIMER)
 
@@ -53,10 +57,59 @@ if run:
     )
     bar.empty()
     cache[params] = report
+    if report.results:
+        n = record(repo, symbol, df, report, conf)
+        st.toast(f"Đã ghi {n} điểm dự báo vào sổ để chấm điểm khi đến ngày", icon="📒")
+
+
+def model_label(key: str) -> str:
+    return ALL_MODELS[key].label if key in ALL_MODELS else "Tổng hợp (Ensemble)" if key == "ensemble" else key
+
+
+def ledger_section() -> None:
+    st.subheader("📒 Sổ dự báo — độ chính xác thực tế")
+    now = now_vn()
+    until = now.date() if now.time() >= time(15) else now.date() - timedelta(days=1)  # phiên hôm nay chưa chốt
+    outcomes = repo.forecast_outcomes(symbol, until=until)
+    logged = repo.forecast_log_count(symbol)
+    if outcomes.empty:
+        st.caption(f"Sổ có {fmt_volume(logged)} điểm dự báo cho {symbol} nhưng chưa điểm nào đến ngày đích. Mỗi lần "
+                   "chạy dự báo (và worker mỗi tối sau giờ đóng cửa) đều được ghi lại; điểm số xuất hiện sau vài phiên.")
+        return
+    max_step = int(outcomes["step"].max())
+    step = max_step
+    if max_step > 1:
+        step = st.slider("Chỉ tính các điểm cách ngày dự báo tối đa (phiên)", 1, max_step, max_step, key="ledger_step")
+    sc = score_outcomes(outcomes, max_step=step)
+    naive = sc.loc[sc["model"].eq("naive"), "mape"]
+    sc["Thắng Naive?"] = sc["mape"].lt(naive.iloc[0]).map({True: "✅", False: "❌"}) if len(naive) else "—"
+    sc.loc[sc["model"].eq("naive"), "Thắng Naive?"] = "(mốc chuẩn)"
+    # Định dạng sẵn thành chuỗi: ô trống (Naive không có hướng / khoảng) hiện "—".
+    sc["coverage"] = [f"{c:.0f}% / {k:.0f}%" if pd.notna(c) else "—" for c, k in zip(sc["coverage"], sc["conf"])]
+    sc["mape"] = sc["mape"].map(lambda v: f"{v:.2f}".replace(".", ","))
+    sc["direction_acc"] = sc["direction_acc"].map(lambda v: "—" if pd.isna(v) else f"{v:.0f}")
+    st.dataframe(
+        sc.drop(columns=["conf"]).assign(model=sc["model"].map(model_label)).rename(columns={
+            "model": "Mô hình", "mape": "MAPE (%)", "direction_acc": "Đúng hướng (%)",
+            "coverage": "Độ phủ thực tế / danh nghĩa", "forecasts": "Số lần dự báo", "points": "Số điểm",
+        }),
+        hide_index=True, width="stretch",
+    )
+    by_step = mape_by_step(outcomes[outcomes["step"] <= step])
+    if len(by_step) > 1:
+        fig = go.Figure([go.Scatter(x=by_step.index, y=by_step[m], name=model_label(m), mode="lines+markers")
+                         for m in by_step.columns])
+        fig.update_layout(height=320, margin=dict(l=10, r=10, t=30, b=10), xaxis_title="Số phiên sau ngày dự báo",
+                          yaxis_title="MAPE (%)", legend=dict(orientation="h", y=1.1, x=0), separators=",.")
+        st.plotly_chart(fig, width="stretch")
+    st.caption("Khác với walk-forward (dự báo lại quá khứ), sổ dự báo chấm điểm các dự báo đã đưa ra trước khi có "
+               "giá thực tế — kiểm định ngoài mẫu thật sự. Ít điểm thì kết quả còn nhiễu.")
+
 
 report = cache.get(params)
 if report is None:
     st.info("Chọn mô hình rồi bấm **Chạy dự báo**.")
+    ledger_section()
     st.stop()
 
 for key, err in report.errors.items():
@@ -93,7 +146,7 @@ for i, (key, res) in enumerate(series.items()):
     ))
 fig.update_layout(height=520, margin=dict(l=10, r=10, t=30, b=10), hovermode="x unified",
                   legend=dict(orientation="h", y=1.05, x=0), separators=",.")
-fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
+fig.update_xaxes(rangebreaks=date_breaks(hist.index.append(series[band_key].dates)))
 st.plotly_chart(fig, width="stretch")
 
 # ---- Tóm tắt
@@ -140,3 +193,5 @@ with st.expander("📄 Chi tiết theo từng phiên"):
     st.dataframe(detail.style.format(lambda v: fmt_price(v, idx)), width="stretch")
     st.download_button("⬇️ Tải CSV", detail.to_csv().encode("utf-8-sig"),
                        file_name=f"du_bao_{symbol}_{horizon}phien.csv", mime="text/csv")
+
+ledger_section()

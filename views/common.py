@@ -6,7 +6,7 @@ from datetime import datetime
 import pandas as pd
 import streamlit as st
 
-from stockvn.market import fmt_pct, fmt_price, is_index, now_vn
+from stockvn.market import fmt_pct, fmt_price, holidays, is_index, now_vn
 from stockvn.service import App, build_app
 from stockvn.worker import background_state
 
@@ -116,7 +116,18 @@ def fmt_time(dt: datetime | None) -> str:
     return dt.strftime("%H:%M:%S %d/%m") if dt else "—"
 
 
+def date_breaks(index: pd.DatetimeIndex) -> list[dict]:
+    """rangebreaks cho Plotly: ẩn cuối tuần và ngày nghỉ lễ trong khoảng `index`."""
+    breaks: list[dict] = [dict(bounds=["sat", "mon"])]
+    if len(index):
+        lo, hi = index.min().date(), index.max().date()
+        if days := sorted(d.isoformat() for d in holidays() if lo <= d <= hi and d.weekday() < 5):
+            breaks.append(dict(values=days))
+    return breaks
+
+
 __all__ = [
     "DISCLAIMER", "UP", "DOWN", "FLAT", "get_app", "symbol_table", "symbol_options", "symbol_label",
     "symbol_picker", "load_history", "color_change", "fmt_time", "fmt_price", "fmt_pct", "worker_state_label",
+    "date_breaks",
 ]

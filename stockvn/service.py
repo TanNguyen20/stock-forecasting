@@ -34,7 +34,7 @@ class App:
 
     def tracked_symbols(self) -> list[str]:
         symbols = set(self.repo.watchlist()) | {a.symbol for a in self.repo.list_alerts(active_only=True)}
-        return sorted(symbols)
+        return sorted(symbols | set(self.repo.held_symbols()))
 
     def run_cycle(self, heartbeat: bool = True) -> CycleResult:
         symbols = self.tracked_symbols()

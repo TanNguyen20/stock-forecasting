@@ -74,7 +74,35 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
     user_agent TEXT DEFAULT '',
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS trades (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol TEXT NOT NULL,
+    side TEXT NOT NULL CHECK (side IN ('buy', 'sell')),
+    qty REAL NOT NULL CHECK (qty > 0),
+    price REAL NOT NULL CHECK (price >= 0),
+    fee REAL NOT NULL DEFAULT 0,
+    traded_on TEXT NOT NULL,
+    note TEXT DEFAULT '',
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS forecast_log (
+    symbol TEXT NOT NULL,
+    model TEXT NOT NULL,
+    made_on TEXT NOT NULL,
+    target_date TEXT NOT NULL,
+    step INTEGER NOT NULL,
+    base REAL NOT NULL,
+    mean REAL NOT NULL,
+    lower REAL,
+    upper REAL,
+    conf INTEGER,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (symbol, model, made_on, target_date)
+);
 """
+
+# Cột thêm sau phiên bản đầu: (bảng, cột, kiểu). Thêm bằng ALTER TABLE để CSDL cũ vẫn dùng được.
+MIGRATIONS = (("alerts", "param", "REAL"),)
 
 PRICE_COLUMNS = ["open", "high", "low", "close", "volume"]
 
@@ -90,6 +118,9 @@ class Repository:
         with self._conn() as conn:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript(SCHEMA)
+            for table, column, kind in MIGRATIONS:
+                if column not in {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {kind}")
 
     @contextmanager
     def _conn(self) -> Iterator[sqlite3.Connection]:
@@ -143,8 +174,9 @@ class Repository:
             conn.execute("DELETE FROM prices WHERE symbol = ?", (symbol,))
         return self.upsert_prices(symbol, df, source)
 
-    def get_prices(self, symbol: str, start: date | None = None, end: date | None = None) -> pd.DataFrame:
-        sql = "SELECT date, open, high, low, close, volume FROM prices WHERE symbol = ?"
+    def get_prices(self, symbol: str, start: date | None = None, end: date | None = None,
+                   with_source: bool = False) -> pd.DataFrame:
+        sql = f"SELECT date, open, high, low, close, volume{', source' if with_source else ''} FROM prices WHERE symbol = ?"
         params: list = [symbol]
         if start:
             sql += " AND date >= ?"
@@ -167,6 +199,25 @@ class Repository:
     def stored_symbols(self) -> list[str]:
         with self._conn() as conn:
             return [r[0] for r in conn.execute("SELECT DISTINCT symbol FROM prices ORDER BY symbol")]
+
+    def trading_dates(self) -> set[date]:
+        """Các ngày có ít nhất một mã giao dịch."""
+        with self._conn() as conn:
+            return {date.fromisoformat(r[0]) for r in conn.execute("SELECT DISTINCT date FROM prices")}
+
+    def latest_prices(self, symbols: Iterable[str], sessions: int) -> dict[str, pd.DataFrame]:
+        """`sessions` phiên gần nhất của nhiều mã trong một truy vấn (dùng cho bộ lọc)."""
+        symbols = list(symbols)
+        if not symbols:
+            return {}
+        with self._conn() as conn:
+            df = pd.read_sql_query(
+                "SELECT symbol, date, open, high, low, close, volume FROM ("
+                " SELECT *, ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY date DESC) AS rn FROM prices"
+                f" WHERE symbol IN ({','.join('?' * len(symbols))})) WHERE rn <= ? ORDER BY symbol, date",
+                conn, params=[*symbols, sessions], parse_dates=["date"],
+            )
+        return {sym: g.drop(columns="symbol").set_index("date") for sym, g in df.groupby("symbol")}
 
     # ---------- Giá hiện tại ----------
     def upsert_quote(self, q: Quote) -> None:
@@ -232,18 +283,18 @@ class Repository:
         return Alert(
             id=r["id"], symbol=r["symbol"], kind=AlertKind(r["kind"]), threshold=r["threshold"],
             channels=tuple(Channel(c) for c in r["channels"].split(",") if c),
-            note=r["note"] or "", active=bool(r["active"]), armed=bool(r["armed"]),
+            note=r["note"] or "", active=bool(r["active"]), armed=bool(r["armed"]), param=r["param"],
             created_at=_dt(r["created_at"]), last_triggered_at=_dt(r["last_triggered_at"]),
         )
 
     def add_alert(self, alert: Alert) -> int:
         with self._conn() as conn:
             cur = conn.execute(
-                "INSERT INTO alerts (symbol, kind, threshold, channels, note, active, armed, created_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, 1, ?)",
-                (alert.symbol.upper(), alert.kind.value, alert.threshold,
+                "INSERT INTO alerts (symbol, kind, threshold, param, channels, note, active, armed, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)",
+                (alert.symbol.upper(), alert.kind.value, alert.threshold, alert.param,
                  ",".join(c.value for c in alert.channels), alert.note, int(alert.active),
-                 now_vn().isoformat()),
+                 (alert.created_at or now_vn()).isoformat()),
             )
             return int(cur.lastrowid)
 
@@ -306,4 +357,82 @@ class Repository:
                 " ORDER BY id DESC LIMIT ?",
                 conn, params=[limit],
             )
+
+    # ---------- Giao dịch (danh mục đầu tư) ----------
+    def add_trade(self, symbol: str, side: str, qty: float, price: float, fee: float, traded_on: date,
+                  note: str = "") -> int:
+        with self._conn() as conn:
+            cur = conn.execute(
+                "INSERT INTO trades (symbol, side, qty, price, fee, traded_on, note, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (symbol.upper(), side, qty, price, fee, traded_on.isoformat(), note, now_vn().isoformat()),
+            )
+            return int(cur.lastrowid)
+
+    def trades(self) -> pd.DataFrame:
+        with self._conn() as conn:
+            return pd.read_sql_query(
+                "SELECT id, symbol, side, qty, price, fee, traded_on, note FROM trades ORDER BY traded_on, id",
+                conn, parse_dates=["traded_on"],
+            )
+
+    def delete_trade(self, trade_id: int) -> None:
+        with self._conn() as conn:
+            conn.execute("DELETE FROM trades WHERE id = ?", (trade_id,))
+
+    def held_symbols(self) -> list[str]:
+        """Các mã đang còn cổ phiếu (tổng mua > tổng bán)."""
+        with self._conn() as conn:
+            return [r[0] for r in conn.execute(
+                "SELECT symbol FROM trades GROUP BY symbol"
+                " HAVING SUM(CASE side WHEN 'buy' THEN qty ELSE -qty END) > 0 ORDER BY symbol"
+            )]
+
+    # ---------- Sổ dự báo (chấm điểm ngoài mẫu) ----------
+    def log_forecast(self, symbol: str, model: str, made_on: date, base: float, dates: Iterable,
+                     mean: Iterable[float], lower: Iterable[float] | None, upper: Iterable[float] | None,
+                     conf: int | None) -> int:
+        """Ghi một lần dự báo; chạy lại cùng mô hình cùng ngày dữ liệu thì ghi đè."""
+        dates, mean = list(dates), list(mean)
+        lower = list(lower) if lower is not None else [None] * len(mean)
+        upper = list(upper) if upper is not None else [None] * len(mean)
+        created = now_vn().isoformat()
+        rows = [
+            (symbol.upper(), model, made_on.isoformat(), pd.Timestamp(d).strftime("%Y-%m-%d"), step, base,
+             float(m), None if lo is None else float(lo), None if hi is None else float(hi), conf, created)
+            for step, (d, m, lo, hi) in enumerate(zip(dates, mean, lower, upper), 1)
+        ]
+        with self._conn() as conn:
+            conn.executemany(
+                "INSERT OR REPLACE INTO forecast_log (symbol, model, made_on, target_date, step, base, mean,"
+                " lower, upper, conf, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                rows,
+            )
+        return len(rows)
+
+    def forecast_outcomes(self, symbol: str | None = None, until: date | None = None) -> pd.DataFrame:
+        """Các dự báo đã đến ngày đích (đến hết `until`), kèm giá đóng cửa thực tế."""
+        sql = (
+            "SELECT f.symbol, f.model, f.made_on, f.target_date, f.step, f.base, f.mean, f.lower, f.upper, f.conf,"
+            " p.close AS actual FROM forecast_log f"
+            " JOIN prices p ON p.symbol = f.symbol AND p.date = f.target_date"
+            " WHERE f.target_date > f.made_on"
+        )
+        params: list = []
+        if until:
+            sql += " AND f.target_date <= ?"
+            params.append(until.isoformat())
+        if symbol:
+            sql += " AND f.symbol = ?"
+            params.append(symbol.upper())
+        with self._conn() as conn:
+            return pd.read_sql_query(sql + " ORDER BY f.made_on, f.step", conn, params=params,
+                                     parse_dates=["made_on", "target_date"])
+
+    def forecast_log_count(self, symbol: str | None = None) -> int:
+        sql, params = "SELECT COUNT(*) FROM forecast_log", []
+        if symbol:
+            sql, params = sql + " WHERE symbol = ?", [symbol.upper()]
+        with self._conn() as conn:
+            return int(conn.execute(sql, params).fetchone()[0])
 

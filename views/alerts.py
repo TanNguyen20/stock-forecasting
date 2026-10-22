@@ -4,10 +4,22 @@ import pandas as pd
 import streamlit as st
 
 from stockvn.market import is_index, now_vn
-from stockvn.models import ALERT_LABELS, ALERT_UNITS, CHANNEL_LABELS, Alert, AlertKind, Channel
+from stockvn.models import ALERT_LABELS, ALERT_UNITS, CHANNEL_LABELS, SMA_KINDS, Alert, AlertKind, Channel
 from stockvn.service import HEARTBEAT_KEY
 from stockvn.worker import background_state
 from views.common import DISCLAIMER, fmt_price, fmt_time, get_app, symbol_picker, worker_state_label
+
+THRESHOLD_HELP = {
+    AlertKind.ABOVE_SMA: "0 = báo ngay khi giá cắt lên đường SMA; 2 = khi giá cao hơn SMA từ 2% trở lên.",
+    AlertKind.BELOW_SMA: "0 = báo ngay khi giá cắt xuống đường SMA; 2 = khi giá thấp hơn SMA từ 2% trở lên.",
+    AlertKind.HIGH_52W: "So với giá cao nhất 252 phiên trước hôm nay. 0 = vừa phá đỉnh.",
+    AlertKind.LOW_52W: "So với giá thấp nhất 252 phiên trước hôm nay. 0 = vừa thủng đáy.",
+    AlertKind.TRAILING_STOP: "Mức giảm từ giá đóng cửa cao nhất kể từ ngày tạo cảnh báo.",
+    AlertKind.CEILING: "Biên độ HOSE ±7%, HNX ±10%, UPCoM ±15% so với giá tham chiếu; để 0,3% vì giá trần được "
+                       "làm tròn theo bước giá. Cần danh sách mã (trang Cài đặt) để biết sàn niêm yết.",
+    AlertKind.FLOOR: "Biên độ HOSE ±7%, HNX ±10%, UPCoM ±15% so với giá tham chiếu; để 0,3% vì giá sàn được "
+                     "làm tròn theo bước giá. Cần danh sách mã (trang Cài đặt) để biết sàn niêm yết.",
+}
 
 app = get_app()
 repo = app.repo
@@ -54,13 +66,22 @@ with st.container(border=True):
         default, step = {
             AlertKind.CHANGE_UP: (3.0, 0.5), AlertKind.CHANGE_DOWN: (3.0, 0.5),
             AlertKind.VOLUME_SPIKE: (2.0, 0.5), AlertKind.RSI_ABOVE: (70.0, 1.0), AlertKind.RSI_BELOW: (30.0, 1.0),
+            AlertKind.ABOVE_SMA: (0.0, 0.5), AlertKind.BELOW_SMA: (0.0, 0.5),
+            AlertKind.HIGH_52W: (0.0, 0.5), AlertKind.LOW_52W: (0.0, 0.5),
+            AlertKind.TRAILING_STOP: (8.0, 0.5), AlertKind.CEILING: (0.3, 0.1), AlertKind.FLOOR: (0.3, 0.1),
         }[kind]
+    if kind in (AlertKind.CEILING, AlertKind.FLOOR) and idx:
+        st.warning("Chỉ số không có giá trần/sàn — chọn một mã cổ phiếu.")
 
     with st.form("new_alert", clear_on_submit=False, border=False):
         c3, c4 = st.columns(2)
+        param = None
+        if kind in SMA_KINDS:
+            param = float(c3.selectbox("Đường SMA (số phiên)", [10, 20, 50, 100, 200], index=1))
         unit = "điểm" if idx and ALERT_UNITS[kind] == "VND" else ALERT_UNITS[kind]
         threshold = c3.number_input(f"Ngưỡng ({unit})" if unit else "Ngưỡng", min_value=0.0, value=float(default),
-                                    step=step, format="%.2f" if idx or step < 1 else "%.0f")
+                                    step=step, format="%.2f" if idx or step < 1 else "%.0f",
+                                    help=THRESHOLD_HELP.get(kind))
         if quote:
             c3.caption(f"Giá hiện tại: **{fmt_price(quote.price, idx)}** ({quote.date.strftime('%d/%m')})")
         channels = c4.multiselect(
@@ -78,7 +99,7 @@ with st.container(border=True):
                 st.error("Chọn ít nhất một kênh thông báo.")
             else:
                 alert_id = repo.add_alert(Alert(symbol=symbol, kind=kind, threshold=threshold,
-                                                channels=tuple(channels), note=note))
+                                                channels=tuple(channels), note=note, param=param))
                 st.toast(f"Đã tạo cảnh báo #{alert_id} cho {symbol}", icon="✅")
                 st.rerun()
 
@@ -93,7 +114,7 @@ else:
         "id": a.id,
         "Bật": a.active,
         "Mã": a.symbol,
-        "Điều kiện": ALERT_LABELS[a.kind],
+        "Điều kiện": a.label,
         "Ngưỡng": fmt_price(a.threshold, is_index(a.symbol)) if ALERT_UNITS[a.kind] == "VND" else f"{a.threshold:g} {ALERT_UNITS[a.kind]}",
         "Giá hiện tại": fmt_price(quotes[a.symbol].price, is_index(a.symbol)) if a.symbol in quotes else "—",
         "Kênh": ", ".join(CHANNEL_LABELS[c] for c in a.channels),

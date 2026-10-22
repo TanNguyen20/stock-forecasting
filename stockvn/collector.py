@@ -27,6 +27,9 @@ USER_AGENT = (
     "(KHTML, like Gecko) Chrome/130.0 Safari/537.36"
 )
 TIMEOUT = 20
+# Phát hiện điều chỉnh giá: >= 2 phiên đã qua lệch > 0,5% so với bản đã lưu từ cùng nguồn.
+ADJUST_TOLERANCE = 0.005
+ADJUST_MIN_SESSIONS = 2
 
 
 class SourceError(RuntimeError):
@@ -207,14 +210,41 @@ class Collector:
             df, src = self.fetch_history(symbol, end - timedelta(days=365 * years), end)
             return self.repo.replace_prices(symbol, df, src)
         df, src = self.fetch_history(symbol, last - timedelta(days=7), end)
-        return self.repo.upsert_prices(symbol, df, src)
+        return self._store_recent(symbol, df, src, years)
+
+    def history_adjusted(self, symbol: str, fresh: pd.DataFrame, source: str) -> bool:
+        """Nguồn đã điều chỉnh giá các phiên đã qua (cổ tức, chia tách...) so với bản đang lưu?
+
+        Chỉ so với các phiên đã lưu từ cùng nguồn (mỗi nguồn điều chỉnh một kiểu) và bỏ qua phiên hôm nay
+        (giá còn chạy). Điều chỉnh làm lệch mọi phiên trước ngày GDKHQ, còn phiên cuối lưu giữa giờ chỉ lệch
+        một phiên -> cần ít nhất ADJUST_MIN_SESSIONS phiên lệch quá ADJUST_TOLERANCE.
+        """
+        past = fresh.loc[fresh.index < pd.Timestamp(today_vn()), "close"]
+        if past.empty:
+            return False
+        stored = self.repo.get_prices(symbol, start=past.index[0].date(), end=past.index[-1].date(),
+                                      with_source=True)
+        stored = stored.loc[stored["source"] == source, "close"]
+        common = stored.index.intersection(past.index)
+        drift = (past.loc[common] / stored.loc[common] - 1).abs()
+        return int((drift > ADJUST_TOLERANCE).sum()) >= ADJUST_MIN_SESSIONS
+
+    def _store_recent(self, symbol: str, df: pd.DataFrame, source: str, years: int = 10) -> int:
+        """Lưu các phiên gần đây; nếu nguồn đã điều chỉnh giá quá khứ thì tải lại toàn bộ để lịch sử liền mạch."""
+        if self.history_adjusted(symbol, df, source):
+            log.info("%s: nguồn %s đã điều chỉnh giá lịch sử (cổ tức/chia tách), tải lại toàn bộ", symbol, source)
+            try:
+                return self.sync_history(symbol, years, full=True)
+            except Exception as exc:  # noqa: BLE001 - lỗi mạng: lưu tạm các phiên mới, vòng sau thử lại
+                log.warning("Tải lại toàn bộ %s thất bại: %s", symbol, exc)
+        return self.repo.upsert_prices(symbol, df, source)
 
     def refresh_quote(self, symbol: str) -> Quote:
         """Lấy giá mới nhất (nến ngày hiện tại) và lưu cả vào lịch sử."""
         symbol = symbol.upper()
         end = today_vn()
         df, src = self.fetch_history(symbol, end - timedelta(days=45), end)
-        self.repo.upsert_prices(symbol, df, src)
+        self._store_recent(symbol, df, src)
         quote = build_quote(symbol, df, src)
         self.repo.upsert_quote(quote)
         return quote
